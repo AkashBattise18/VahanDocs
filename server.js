@@ -20,12 +20,13 @@ if (!fs.existsSync(uploadsDir)) {
 // Serve uploaded document images statically
 app.use('/uploads', express.static(uploadsDir));
 
-// MySQL Database Connection Pool
+// MySQL Database Connection Pool (Supports Environment Variables or Fallback)
 const db = mysql.createPool({
-    host: 'localhost',
-    user: 'root',
-    password: '1234',
-    database: 'vahandocs_db',
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '1234',
+    database: process.env.DB_NAME || 'vahandocs_db',
+    port: process.env.DB_PORT || 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -76,7 +77,6 @@ db.getConnection((err, conn) => {
 
     conn.query(createUsersTable, () => {});
     conn.query(createVehiclesTable, () => {
-        // Ensure nullable columns and document_image exists
         conn.query('ALTER TABLE vehicles MODIFY puc_expiry DATE NULL, MODIFY insurance_expiry DATE NULL, MODIFY passing_expiry DATE NULL', () => {});
     });
     conn.query(createNotificationsTable, () => {});
@@ -147,7 +147,7 @@ app.get('/api/user/latest', (req, res) => {
     });
 });
 
-// 3. API Endpoint: Save Vehicle (Handles Manual Entry & OCR Scan with Document Image)
+// 3. API Endpoint: Save Vehicle
 app.post('/api/vehicle', (req, res) => {
     let {
         vehicle_number,
@@ -164,10 +164,8 @@ app.post('/api/vehicle', (req, res) => {
         return res.status(400).json({ error: 'Vehicle number and vehicle type are required' });
     }
 
-    // Clean vehicle number format
     vehicle_number = vehicle_number.toUpperCase().trim();
 
-    // Map single OCR expiry_date if provided without all specific fields
     if (expiry_date && (!puc_expiry && !insurance_expiry && !passing_expiry)) {
         if (document_type === 'Insurance') {
             insurance_expiry = expiry_date;
@@ -178,7 +176,6 @@ app.post('/api/vehicle', (req, res) => {
         }
     }
 
-    // Handle base64 document image saving to server disk
     let savedImagePath = null;
     if (document_image && document_image.startsWith('data:image')) {
         try {
@@ -200,7 +197,6 @@ app.post('/api/vehicle', (req, res) => {
         savedImagePath = document_image;
     }
 
-    // Determine primary expiry_date
     const primaryExpiry = expiry_date || puc_expiry || insurance_expiry || passing_expiry || null;
 
     const query = `
@@ -228,7 +224,6 @@ app.post('/api/vehicle', (req, res) => {
 
             const vehicleId = result.insertId;
 
-            // Automated Alarm / Notification generation based on expiry status
             const checkAndCreateAlert = (docName, dateVal) => {
                 if (!dateVal) return;
                 const days = getDaysRemaining(dateVal);
@@ -251,7 +246,6 @@ app.post('/api/vehicle', (req, res) => {
             checkAndCreateAlert('Insurance', insurance_expiry);
             checkAndCreateAlert('Passing', passing_expiry);
 
-            // General registration notification
             db.query(
                 'INSERT INTO notifications (vehicle_id, vehicle_number, title, message, type) VALUES (?, ?, ?, ?, ?)',
                 [
@@ -325,7 +319,6 @@ app.get('/api/documents', (req, res) => {
         const documents = [];
 
         results.forEach(v => {
-            // Document types for fleet
             const docTypes = [
                 { type: 'PUC Certificate', date: v.puc_expiry },
                 { type: 'Vehicle Insurance', date: v.insurance_expiry },
@@ -333,7 +326,6 @@ app.get('/api/documents', (req, res) => {
                 { type: 'Registration / Document', date: v.expiry_date }
             ];
 
-            // If a specific document image was uploaded, capture it
             let hasAdded = false;
             docTypes.forEach(doc => {
                 if (doc.date) {
@@ -357,7 +349,6 @@ app.get('/api/documents', (req, res) => {
                 }
             });
 
-            // If vehicle has no explicit expiry but has document_image
             if (!hasAdded && v.document_image) {
                 documents.push({
                     vehicle_id: v.id,
@@ -448,8 +439,8 @@ app.delete('/api/vehicle/:id', (req, res) => {
     });
 });
 
-// Server Start
-const PORT = 3000;
+// Server Start (Render automatically assigns PORT via process.env.PORT)
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`VahanDocs Server is running on port ${PORT}`);
 });
